@@ -1,0 +1,94 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_PROCESSES 100
+
+// Define Process structure before using it
+typedef struct {
+    char id[5];
+    int arrival_time;
+    int size;
+    int num_pages;
+    int page_table[100]; // Maps process pages to frame numbers
+} Process;
+
+Process process_list[MAX_PROCESSES];
+int process_count = 0;
+
+void read_processes_from_file(const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("Error opening input file");
+        exit(1);
+    }
+
+    // Read the processes from the file
+    while (fscanf(file, "%s %d %d", process_list[process_count].id,
+                  &process_list[process_count].arrival_time,
+                  &process_list[process_count].size) == 3) {
+        process_count++;
+    }
+
+    fclose(file);
+}
+
+typedef struct {
+    int frame_id;
+    char process_id[5];
+    int page_number;
+    int is_free;
+} Frame;
+
+int total_memory = 1024;   // Example
+int page_size = 128;
+int total_frames = 8;
+Frame memory[8];
+
+void allocate_memory(Process *p) {
+    int pages_needed = (p->size + page_size - 1) / page_size;
+    int pages_allocated = 0;
+    for (int i = 0; i < total_frames && pages_allocated < pages_needed; i++) {
+        if (memory[i].is_free) {
+            memory[i].is_free = 0;
+            strcpy(memory[i].process_id, p->id);
+            memory[i].page_number = pages_allocated;
+            p->page_table[pages_allocated] = i;
+            pages_allocated++;
+        }
+    }
+    p->num_pages = pages_allocated;
+}
+
+void display_memory() {
+    printf("Frame\tProcess\tPage\n");
+    for (int i = 0; i < total_frames; i++) {
+        if (memory[i].is_free)
+            printf("%d\tFree\t-\n", i);
+        else
+            printf("%d\t%s\t%d\n", i, memory[i].process_id, memory[i].page_number);
+    }
+}
+
+int main() {
+    // Initialize memory
+    for (int i = 0; i < total_frames; i++) {
+        memory[i].is_free = 1;
+        memory[i].frame_id = i;
+        strcpy(memory[i].process_id, "-");
+        memory[i].page_number = -1;
+    }
+
+    // Read processes from file
+    read_processes_from_file("processes.txt");
+
+    // Allocate memory to each process
+    for (int i = 0; i < process_count; i++) {
+        allocate_memory(&process_list[i]);
+    }
+
+    // Display memory state
+    display_memory();
+
+    return 0;
+}
