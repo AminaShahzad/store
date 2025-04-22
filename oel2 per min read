@@ -1,0 +1,146 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <windows.h> // for sleep()
+
+#define MAX_PROCESSES 100
+
+// Define Process structure before using it
+typedef struct {
+    char id[5];
+    int arrival_time;
+    int size;
+    int burst_time;
+    int remaining_time;
+    int num_pages;
+    int page_table[100]; // Maps process pages to frame numbers
+    int is_allocated;
+    int is_completed;
+} Process;
+
+Process process_list[MAX_PROCESSES];
+int process_count = 0;
+
+void read_processes_from_file(const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("Error opening input file");
+        exit(1);
+    }
+
+    // Read the processes from the file
+    while (fscanf(file, "%s %d %d %d", process_list[process_count].id,
+                  &process_list[process_count].arrival_time,
+                  &process_list[process_count].size,
+                  &process_list[process_count].burst_time) == 4) {
+        process_list[process_count].remaining_time = process_list[process_count].burst_time;
+        process_list[process_count].is_allocated = 0;
+        process_list[process_count].is_completed = 0;
+        process_count++;
+    }
+
+    fclose(file);
+}
+
+typedef struct {
+    int frame_id;
+    char process_id[5];
+    int page_number;
+    int is_free;
+} Frame;
+
+int total_memory = 1024;   // Example
+int page_size = 128;
+int total_frames = 8;
+Frame memory[8];
+
+void allocate_memory(Process *p) {
+    int pages_needed = (p->size + page_size - 1) / page_size;
+    int pages_allocated = 0;
+    for (int i = 0; i < total_frames && pages_allocated < pages_needed; i++) {
+        if (memory[i].is_free) {
+            memory[i].is_free = 0;
+            strcpy(memory[i].process_id, p->id);
+            memory[i].page_number = pages_allocated;
+            p->page_table[pages_allocated] = i;
+            pages_allocated++;
+        }
+    }
+    p->num_pages = pages_allocated;
+    if (pages_allocated == pages_needed)
+        p->is_allocated = 1;
+}
+
+void free_memory(Process *p) {
+    for (int i = 0; i < p->num_pages; i++) {
+        int frame_index = p->page_table[i];
+        memory[frame_index].is_free = 1;
+        strcpy(memory[frame_index].process_id, "-");
+        memory[frame_index].page_number = -1;
+    }
+    p->is_completed = 1;
+}
+
+void display_memory(int time) {
+    printf("\n--- Memory State at Time %d ---\n", time);
+    printf("Frame\tProcess\tPage\n");
+    for (int i = 0; i < total_frames; i++) {
+        if (memory[i].is_free)
+            printf("%d\tFree\t-\n", i);
+        else
+            printf("%d\t%s\t%d\n", i, memory[i].process_id, memory[i].page_number);
+    }
+    printf("-----------------------------\n");
+}
+
+int all_processes_completed() {
+    for (int i = 0; i < process_count; i++) {
+        if (!process_list[i].is_completed) return 0;
+    }
+    return 1;
+}
+
+int main() {
+    // Initialize memory
+    for (int i = 0; i < total_frames; i++) {
+        memory[i].is_free = 1;
+        memory[i].frame_id = i;
+        strcpy(memory[i].process_id, "-");
+        memory[i].page_number = -1;
+    }
+
+    // Read processes from file
+    read_processes_from_file("processes.txt");
+
+    int current_time = 0;
+    while (!all_processes_completed()) {
+        // Allocate memory to processes arriving at current_time
+        for (int i = 0; i < process_count; i++) {
+            if (!process_list[i].is_allocated && process_list[i].arrival_time <= current_time) {
+                allocate_memory(&process_list[i]);
+                if (process_list[i].is_allocated) {
+                    display_memory(current_time);
+                }
+            }
+        }
+
+        // Simulate process execution
+        for (int i = 0; i < process_count; i++) {
+            if (process_list[i].is_allocated && !process_list[i].is_completed) {
+                process_list[i].remaining_time--;
+                if (process_list[i].remaining_time == 0) {
+                    free_memory(&process_list[i]);
+                    display_memory(current_time);
+                }
+            }
+        }
+
+        sleep(1); // simulate time passage
+        current_time++;
+    }
+
+    printf("\nAll processes completed. Final memory state:\n");
+    display_memory(current_time);
+
+    return 0;
+}
