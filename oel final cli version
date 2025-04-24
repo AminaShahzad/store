@@ -1,0 +1,214 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <windows.h>  // For Sleep on Windows
+
+#define MAX_PROCESSES 100
+#define PAGE_SIZE 128
+#define TOTAL_MEMORY 1024
+#define TOTAL_FRAMES (TOTAL_MEMORY / PAGE_SIZE)
+
+typedef struct {
+    char id[5];
+    int arrival_time;
+    int size;
+    int burst_time;
+    int remaining_time;
+    int num_pages;
+    int page_table[100];
+    int is_in_memory;
+    int start_time;
+    int finish_time;
+    int waiting_time;
+} Process;
+
+typedef struct {
+    int frame_id;
+    char process_id[5];
+    int page_number;
+    int is_free;
+} Frame;
+
+Process process_list[MAX_PROCESSES];
+Frame memory[TOTAL_FRAMES];
+int process_count = 0;
+
+void read_processes_from_file(const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("Error opening input file");
+        exit(1);
+    }
+
+    while (fscanf(file, "%s %d %d %d", process_list[process_count].id,
+                  &process_list[process_count].arrival_time,
+                  &process_list[process_count].size,
+                  &process_list[process_count].burst_time) == 4) {
+        process_list[process_count].remaining_time = process_list[process_count].burst_time;
+        process_list[process_count].is_in_memory = 0;
+        process_list[process_count].start_time = -1;
+        process_list[process_count].finish_time = -1;
+        process_list[process_count].waiting_time = 0;
+        process_count++;
+    }
+
+    fclose(file);
+}
+
+void initialize_memory() {
+    for (int i = 0; i < TOTAL_FRAMES; i++) {
+        memory[i].frame_id = i;
+        strcpy(memory[i].process_id, "-");
+        memory[i].page_number = -1;
+        memory[i].is_free = 1;
+    }
+}
+
+int allocate_memory(Process *p) {
+    int pages_needed = (p->size + PAGE_SIZE - 1) / PAGE_SIZE;
+    int pages_allocated = 0;
+    for (int i = 0; i < TOTAL_FRAMES && pages_allocated < pages_needed; i++) {
+        if (memory[i].is_free) {
+            memory[i].is_free = 0;
+            strcpy(memory[i].process_id, p->id);
+            memory[i].page_number = pages_allocated;
+            p->page_table[pages_allocated] = i;
+            pages_allocated++;
+        }
+    }
+
+    p->num_pages = pages_allocated;
+    if (pages_allocated == pages_needed) {
+        p->is_in_memory = 1;
+        return 1;
+    }
+
+    // Rollback if not all pages allocated
+    for (int i = 0; i < TOTAL_FRAMES; i++) {
+        if (strcmp(memory[i].process_id, p->id) == 0) {
+            memory[i].is_free = 1;
+            strcpy(memory[i].process_id, "-");
+            memory[i].page_number = -1;
+        }
+    }
+    return 0;
+}
+
+void free_memory(Process *p) {
+    for (int i = 0; i < TOTAL_FRAMES; i++) {
+        if (strcmp(memory[i].process_id, p->id) == 0) {
+            memory[i].is_free = 1;
+            strcpy(memory[i].process_id, "-");
+            memory[i].page_number = -1;
+        }
+    }
+    p->is_in_memory = 0;
+}
+
+void display_memory_state(int current_time) {
+    printf("\n--- Memory State at Time %d ---\n", current_time);
+    printf("Frame\tProcess\tPage\n");
+    for (int i = 0; i < TOTAL_FRAMES; i++) {
+        if (memory[i].is_free)
+            printf("%d\tFree\t-\n", i);
+        else
+            printf("%d\t%s\t%d\n", i, memory[i].process_id, memory[i].page_number);
+    }
+    printf("---------------------------------\n");
+}
+
+void display_process_table() {
+    printf("\n--- Process Table ---\n");
+    printf("PID\tArrival\tBurst\tStart\tFinish\tWaiting\n");
+    for (int i = 0; i < process_count; i++) {
+        printf("%s\t%d\t%d\t%d\t%d\t%d\n",
+               process_list[i].id,
+               process_list[i].arrival_time,
+               process_list[i].burst_time,
+               process_list[i].start_time,
+               process_list[i].finish_time,
+               process_list[i].waiting_time);
+    }
+    printf("---------------------------------\n");
+}
+
+int all_processes_done() {
+    for (int i = 0; i < process_count; i++) {
+        if (process_list[i].remaining_time > 0)
+            return 0;
+    }
+    return 1;
+}
+void write_memory_to_json(int current_time) {
+    FILE *file = fopen("memory.json", "w");
+    if (!file) {
+        perror("Error writing JSON");
+        return;
+    }
+
+    fprintf(file, "{\n  \"time\": %d,\n  \"frames\": [\n", current_time);
+    for (int i = 0; i < TOTAL_FRAMES; i++) {
+        fprintf(file, "    {\"frame\": %d, \"process\": \"%s\", \"page\": %d, \"free\": %s}%s\n",
+                memory[i].frame_id,
+                memory[i].is_free ? "Free" : memory[i].process_id,
+                memory[i].page_number,
+                memory[i].is_free ? "true" : "false",
+                i < TOTAL_FRAMES - 1 ? "," : "");
+    }
+    fprintf(file, "  ]\n}\n");
+
+    fclose(file);
+}
+
+
+
+int main() {
+    read_processes_from_file("processes.txt");
+    initialize_memory();
+
+    int current_time = 0;
+
+    while (!all_processes_done()) {
+        // 1. Load arriving processes
+        for (int i = 0; i < process_count; i++) {
+            Process *p = &process_list[i];
+            if (p->arrival_time <= current_time && p->remaining_time > 0 && !p->is_in_memory) {
+                if (allocate_memory(p)) {
+                    if (p->start_time == -1)
+                        p->start_time = current_time;
+                }
+            }
+        }
+
+        // 2. Execute active processes (decrement burst time)
+        for (int i = 0; i < process_count; i++) {
+            Process *p = &process_list[i];
+            if (p->is_in_memory && p->remaining_time > 0) {
+                p->remaining_time--;
+            }
+        }
+
+        // 3. Display memory state after process execution
+        display_memory_state(current_time);
+        write_memory_to_json(current_time);
+
+        // 4. Remove completed processes (after memory shown)
+        for (int i = 0; i < process_count; i++) {
+            Process *p = &process_list[i];
+            if (p->is_in_memory && p->remaining_time == 0) {
+                p->finish_time = current_time + 1;
+                p->waiting_time = p->start_time - p->arrival_time;
+                free_memory(p);
+            }
+        }
+
+        Sleep(1000);  // Wait for 1 second
+        current_time++;
+    }
+
+    printf("\nAll processes completed.\n");
+    display_process_table();
+    display_memory_state(current_time);
+
+    return 0;
+}
